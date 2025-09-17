@@ -13,5 +13,16 @@
       "𝙱𝙻𝙾𝙾𝙼𝙱𝙴𝚁𝙶": "unstoppable_trader",
       "𝙲&𝙲 𝙱𝙴𝚃𝙰": "UNSTOP"
     }
+  },
+  {
+    "source_channel_id": -1001755272547,
+    "target_channel_id": -1001565746825,
+    "forward_stickers": true,
+    "enable_edit_tracking": true,
+    "forward_media": true,
+    "forward_caption_only": false,
+    "block_unapproved_links": false,
+    "text_to_remove": [],
+    "text_to_replace": {}
   }
 ]
