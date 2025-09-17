@@ -1,0 +1,17 @@
+[
+  {
+    "source_channel_id": -1003000349367,
+    "target_channel_id": -1002834872534,
+    "forward_stickers": false,
+    "enable_edit_tracking": true,
+    "forward_media": false,
+    "forward_caption_only": false,
+    "block_unapproved_links": false,
+    "text_to_remove": ["𝙲𝚘𝚍𝚎𝙽𝙲𝚊𝚗𝚍𝚕𝚎𝚜", "𝙲𝚘𝚍𝚎𝙽𝙲𝚊𝚗𝚍𝚕𝚎𝚜"],
+    "text_to_replace": {
+      "@CodeAndCandles": "",
+      "𝙱𝙻𝙾𝙾𝙼𝙱𝙴𝚁𝙶": "unstoppable_trader",
+      "𝙲&𝙲 𝙱𝙴𝚃𝙰": "UNSTOP"
+    }
+  }
+]
