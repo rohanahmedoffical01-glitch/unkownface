@@ -32,9 +32,7 @@ api_hash = TELEGRAM_API_HASH
 session_name = 'session'
 # The name of the configuration file
 config_file = 'config.json'
-# Win/Loss tracking file
-tracking_file = 'daily_tracking.json'
-# NEW: Message mapping file for edit tracking
+# Message mapping file for edit tracking
 message_mapping_file = 'message_mapping.json'
 
 # Set up logging with improved formatting
@@ -72,7 +70,7 @@ def start_health_server():
 
 class MessageTracker:
     """
-    NEW: Tracks mapping between source messages and forwarded messages for edit handling
+    Tracks mapping between source messages and forwarded messages for edit handling
     """
     
     def __init__(self, tracking_file: str = message_mapping_file):
@@ -164,243 +162,6 @@ class MessageTracker:
         self.save_mapping()
         logger.info(f"Cleaned up message mappings older than {days} days")
 
-class WinLossTracker:
-    """
-    Win/Loss tracking system for signal analysis with multi-timeframe support
-    """
-    
-    def __init__(self, tracking_file: str):
-        self.tracking_file = tracking_file
-        self.tracking_data = {}
-        self.load_tracking_data()
-        
-    def load_tracking_data(self):
-        """Load tracking data from file"""
-        try:
-            if os.path.exists(self.tracking_file):
-                with open(self.tracking_file, 'r', encoding='utf-8') as f:
-                    self.tracking_data = json.load(f)
-                logger.info(f"Loaded tracking data: {len(self.tracking_data)} channels")
-            else:
-                self.tracking_data = {}
-                logger.info("No existing tracking data found")
-        except Exception as e:
-            logger.error(f"Error loading tracking data: {e}")
-            self.tracking_data = {}
-    
-    def save_tracking_data(self):
-        """Save tracking data to file"""
-        try:
-            with open(self.tracking_file, 'w', encoding='utf-8') as f:
-                json.dump(self.tracking_data, f, indent=2, ensure_ascii=False)
-            logger.debug("Tracking data saved successfully")
-        except Exception as e:
-            logger.error(f"Error saving tracking data: {e}")
-    
-    def is_signal_message(self, text: str) -> Optional[Dict]:
-        """
-        Handles any pair name with a-z, A-Z, 0-9, and hyphens.
-        """
-        if not text:
-            return None
-            
-        signal_pattern = r'([a-zA-Z0-9-]+)\s*⏰\s*(\d{1,2}:\d{2})\s*.*?(\d+)\s*(?:Minutes?|Minute)\s*.*?(PUT(?:\s*DOWN)?|CALL(?:\s*UP)?)'
-        match = re.search(signal_pattern, text, re.IGNORECASE | re.DOTALL)
-        
-        if match:
-            duration_number = int(match.group(3))
-            timeframe = f"M{duration_number}"
-            
-            return {
-                'pair': match.group(1).strip(),
-                'time': match.group(2).strip(),
-                'duration': f"{duration_number} Minute(s)",
-                'timeframe': timeframe,
-                'direction': match.group(4).upper().strip(),
-                'full_text': text
-            }
-        return None
-    
-    def is_result_message(self, text: str) -> Optional[Dict]:
-        """
-        Handles any pair name with a-z, A-Z, 0-9, and hyphens.
-        """
-        if not text:
-            return None
-            
-        result_pattern = r'[📅🗓]\s*([a-zA-Z0-9-]+)\s*(Profit|Loss)\s*[✅✔️☑️](\.|)'
-        match = re.search(result_pattern, text, re.IGNORECASE)
-        if match:
-            return {
-                'pair': match.group(1),
-                'result': match.group(2).lower(),
-                'has_dot': bool(match.group(3)),
-                'full_text': text
-            }
-        return None
-    
-    def add_signal(self, channel_id: str, signal_data: Dict):
-        """Add a new signal to tracking"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        if channel_id not in self.tracking_data:
-            self.tracking_data[channel_id] = {}
-        
-        if today not in self.tracking_data[channel_id]:
-            self.tracking_data[channel_id][today] = {
-                'signals': [],
-                'results': [],
-                'stats': {'total': 0, 'wins': 0, 'losses': 0, 'percentage': 0}
-            }
-        
-        signal_entry = {
-            'pair': signal_data['pair'],
-            'time': signal_data['time'],
-            'timeframe': signal_data['timeframe'],
-            'direction': signal_data['direction'],
-            'timestamp': datetime.now().isoformat(),
-            'result': None
-        }
-        
-        self.tracking_data[channel_id][today]['signals'].append(signal_entry)
-        self.save_tracking_data()
-        
-        logger.info(f"Added {signal_data['timeframe']} signal: {signal_data['pair']} {signal_data['direction']} at {signal_data['time']}")
-    
-    def add_result(self, channel_id: str, result_data: Dict):
-        """
-        Add result and match with existing signal from today or yesterday.
-        """
-        now = datetime.now()
-        today_str = now.strftime('%Y-%m-%d')
-        yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d')
-
-        if channel_id not in self.tracking_data:
-            logger.warning(f"Channel {channel_id} not tracked. Ignoring result.")
-            return
-
-        dates_to_check = [d for d in [today_str, yesterday_str] if d in self.tracking_data.get(channel_id, {})]
-
-        if not dates_to_check:
-            logger.warning(f"No signals found for channel {channel_id} today or yesterday.")
-            return
-
-        matched_signal = None
-        signal_date = None
-
-        for date in dates_to_check:
-            signals = self.tracking_data[channel_id][date]['signals']
-            for signal in reversed(signals):
-                if signal['pair'].lower() == result_data['pair'].lower() and signal['result'] is None:
-                    matched_signal = signal
-                    signal_date = date
-                    break
-            if matched_signal:
-                break
-        
-        if matched_signal:
-            if today_str not in self.tracking_data[channel_id]:
-                self.tracking_data[channel_id][today_str] = {
-                    'signals': [], 'results': [], 'stats': {'total': 0, 'wins': 0, 'losses': 0, 'percentage': 0}
-                }
-
-            matched_signal['result'] = result_data['result']
-            result_entry = {
-                'pair': result_data['pair'],
-                'result': result_data['result'],
-                'has_dot': result_data.get('has_dot', False),
-                'timestamp': now.isoformat(),
-                'signal_timestamp': matched_signal['timestamp']
-            }
-            
-            self.tracking_data[channel_id][today_str]['results'].append(result_entry)
-            
-            self.update_daily_stats(channel_id, signal_date)
-            if signal_date != today_str:
-                 self.update_daily_stats(channel_id, today_str)
-
-            self.save_tracking_data()
-            logger.info(f"Added result: {result_data['pair']} {result_data['result']} (linked to signal from {signal_date})")
-        else:
-            logger.warning(f"No unmatched signal found for result: {result_data['pair']} {result_data['result']}")
-    
-    def update_daily_stats(self, channel_id: str, date: str):
-        """Update daily statistics for a channel"""
-        if channel_id not in self.tracking_data or date not in self.tracking_data[channel_id]:
-            return
-        
-        day_data = self.tracking_data[channel_id][date]
-        wins = sum(1 for r in day_data['results'] if r['result'] == 'profit')
-        losses = sum(1 for r in day_data['results'] if r['result'] == 'loss')
-        total = wins + losses
-        percentage = round((wins / total * 100) if total > 0 else 0, 1)
-        
-        day_data['stats'] = {'total': total, 'wins': wins, 'losses': losses, 'percentage': percentage}
-    
-    def generate_results_summary_report(self, channel_id: str) -> str:
-        """Generate results summary report only"""
-        utc_minus_3 = pytz.timezone('Etc/GMT+3')
-        today = datetime.now(utc_minus_3).strftime('%Y-%m-%d')
-        
-        day_data = self.tracking_data.get(channel_id, {}).get(today)
-        if not day_data:
-            return f"🎯 RESULTS SUMMARY for {today}:\n❌ No completed results"
-        
-        stats = day_data['stats']
-        
-        report_lines = ["🎯 RESULTS SUMMARY:"]
-        if day_data['results']:
-            for i, result in enumerate(day_data['results'], 1):
-                time_str = datetime.fromisoformat(result['timestamp']).strftime('%H:%M')
-                result_emoji = "✅" if result['result'] == 'profit' else "❌"
-                dot = "." if result.get('has_dot', False) else ""
-                result_text = result['result'].capitalize()  # "profit" -> "Profit", "loss" -> "Loss"
-                report_lines.append(f"{i:2}. {time_str} | {result['pair']} {result_text} {result_emoji}{dot}")
-        else:
-            report_lines.append("   No completed results")
-        
-        report_lines.extend(["", "="*40, f"📊 TOTAL SIGNALS: {len(day_data['signals'])}", f"✅ COMPLETED: {len(day_data['results'])}",
-                             f"👍 WINS: {stats['wins']} | 👎 LOSSES: {stats['losses']}", f"🎯 WIN RATE: {stats['percentage']}%"])
-        
-        return "\n".join(report_lines)
-    
-    def split_message(self, message: str, max_length: int = 4000) -> List[str]:
-        """Split long messages into multiple parts"""
-        if len(message) <= max_length:
-            return [message]
-        
-        lines = message.split('\n')
-        messages = []
-        current_message = ""
-        
-        for line in lines:
-            if len(current_message + line + '\n') > max_length:
-                if current_message:
-                    messages.append(current_message.rstrip())
-                    current_message = line + '\n'
-                else:
-                    # Single line is too long, split it
-                    messages.append(line[:max_length])
-                    current_message = line[max_length:] + '\n'
-            else:
-                current_message += line + '\n'
-        
-        if current_message:
-            messages.append(current_message.rstrip())
-        
-        return messages
-    
-    def cleanup_old_data(self):
-        """Remove data older than 2 days"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        for channel_id in list(self.tracking_data.keys()):
-            for date in list(self.tracking_data[channel_id].keys()):
-                if date not in [today, yesterday]:
-                    del self.tracking_data[channel_id][date]
-                    logger.info(f"Cleaned up old data for {channel_id} on {date}")
-        self.save_tracking_data()
-
 class TelegramForwarder:
     
     def __init__(self, api_id: int, api_hash: str, session_name: str, config_file: str):
@@ -408,11 +169,7 @@ class TelegramForwarder:
         self.client = TelegramClient(session_name, api_id, api_hash)
         self.config: Optional[List[Dict[str, Any]]] = None
         self.target_entities, self.source_to_configs = {}, {}
-        self.tracker = WinLossTracker(tracking_file)
-        # NEW: Add message tracker for edit handling
         self.message_tracker = MessageTracker()
-        self.last_cleanup = datetime.now().date()
-        self.last_report_time = datetime.now()
         
     def convert_timezone(self, text: str, source_timezone: str, target_timezone: str) -> str:
         if not all([text, source_timezone, target_timezone]): return text
@@ -466,56 +223,9 @@ class TelegramForwarder:
         logger.info(f"Successfully cached {len(self.target_entities)}/{len(unique_targets)} target entities")
         return bool(self.target_entities)
 
-    def check_daily_cleanup(self):
-        if datetime.now().date() > self.last_cleanup:
-            logger.info("Performing daily cleanup")
-            self.tracker.cleanup_old_data()
-            self.last_cleanup = datetime.now().date()
-    
-    async def send_biweekly_reports(self):
-        """Send reports every 2 hours with results summary only"""
-        if not self.config: return
-        logger.info("Executing scheduled 2-hour report task.")
-        for conf in self.config:
-            if conf.get("auto_biweekly_report", False) and (target_entity := self.target_entities.get(conf["target_channel_id"])):
-                report = self.tracker.generate_results_summary_report(str(conf["source_channel_id"]))
-                
-                message_parts = self.tracker.split_message(report)
-                
-                try:
-                    for i, part in enumerate(message_parts):
-                        if len(message_parts) > 1:
-                            header = f"📊 Report Part {i+1}/{len(message_parts)}\n\n"
-                            await self.client.send_message(target_entity, header + part)
-                        else:
-                            await self.client.send_message(target_entity, part)
-                        
-                        if i < len(message_parts) - 1:
-                            await asyncio.sleep(1)
-                    
-                    logger.info(f"Sent 2-hour report to {conf['target_channel_id']} in {len(message_parts)} part(s)")
-                except Exception as e:
-                    logger.error(f"Failed to send 2-hour report to {conf['target_channel_id']}: {e}")
-
-    async def biweekly_report_scheduler(self):
-        """Schedule reports every 2 hours"""
-        while True:
-            now = datetime.now()
-            next_run = now.replace(minute=0, second=0, microsecond=0)
-            if now.minute > 0 or now.second > 0:
-                next_run += timedelta(hours=1)
-            
-            while next_run.hour % 2 != 0:
-                next_run += timedelta(hours=1)
-            
-            wait_seconds = (next_run - now).total_seconds()
-            logger.info(f"Scheduler: Next 2-hour report in {wait_seconds / 3600:.2f} hours at {next_run.strftime('%H:%M')}.")
-            await asyncio.sleep(wait_seconds)
-            await self.send_biweekly_reports()
-
     async def process_message_for_config(self, message, config: Dict[str, Any]) -> Optional[int]:
         """
-        MODIFIED: Now returns the forwarded message ID for tracking
+        Processes a message for a specific configuration and returns the forwarded message ID.
         """
         try:
             if not (target_entity := self.target_entities.get(config["target_channel_id"])): return None
@@ -527,7 +237,6 @@ class TelegramForwarder:
                     processed_text = self.convert_timezone(processed_text, src_tz, tgt_tz)
                 forward_text = processed_text
 
-            # Send message and capture the result
             sent_message = None
 
             if config.get("forward_caption_only") and message.media and forward_text:
@@ -539,7 +248,6 @@ class TelegramForwarder:
             elif forward_text:
                 sent_message = await self.client.send_message(target_entity, forward_text)
             
-            # Return the forwarded message ID if successful
             return sent_message.id if sent_message else None
             
         except Exception as e:
@@ -548,30 +256,21 @@ class TelegramForwarder:
 
     async def forward_messages(self, event):
         """
-        MODIFIED: Now tracks message mappings for edit handling (only for specific channels)
+        Forwards new messages and tracks them if edit tracking is enabled.
         """
         message, source_id = event.message, str(event.chat_id)
         try:
-            self.check_daily_cleanup()
             if not (matching_configs := self.source_to_configs.get(source_id)): return
             
             logger.info(f"Processing message from {source_id} for {len(matching_configs)} target(s)")
             
-            if any(c.get("enable_winloss_tracking") for c in matching_configs) and message.text:
-                if (signal_data := self.tracker.is_signal_message(message.text)):
-                    self.tracker.add_signal(str(source_id), signal_data)
-                if (result_data := self.tracker.is_result_message(message.text)):
-                    self.tracker.add_result(str(source_id), result_data)
-            
             successful_forwards = 0
             for config in matching_configs:
-                # MODIFIED: Process message and get forwarded message ID
                 forwarded_msg_id = await self.process_message_for_config(message, config)
                 
                 if forwarded_msg_id:
                     successful_forwards += 1
                     
-                    # NEW: Track the message mapping for edit handling (ONLY if enabled for this channel)
                     if config.get("enable_edit_tracking", False):
                         self.message_tracker.add_forwarded_message(
                             source_chat_id=source_id,
@@ -588,53 +287,38 @@ class TelegramForwarder:
 
     async def handle_message_edits(self, event):
         """
-        NEW: Handle message edits from source channels (only for channels with edit tracking enabled)
+        Handles message edits from source channels if edit tracking is enabled.
         """
         message, source_id = event.message, str(event.chat_id)
         
         try:
             logger.info(f"Message edit detected from {source_id}, message ID: {message.id}")
             
-            # Get all forwarded messages for this source message
             forwarded_messages = self.message_tracker.get_forwarded_messages(source_id, message.id)
             
             if not forwarded_messages:
                 logger.info(f"No forwarded messages found for edited message {source_id}:{message.id} (edit tracking may not be enabled)")
                 return
             
-            # Get configs for this source channel
             matching_configs = self.source_to_configs.get(source_id, [])
             if not matching_configs:
                 return
             
-            # Process the edited message for each forwarded instance
             successful_edits = 0
             for forwarded_info in forwarded_messages:
                 target_chat_id = forwarded_info['target_chat_id']
                 forwarded_msg_id = forwarded_info['forwarded_msg_id']
                 
-                # Find the config for this target
-                target_config = None
-                for config in matching_configs:
-                    if str(config["target_channel_id"]) == target_chat_id:
-                        target_config = config
-                        break
+                target_config = next((c for c in matching_configs if str(c["target_channel_id"]) == target_chat_id), None)
                 
-                if not target_config:
+                if not target_config or not target_config.get("enable_edit_tracking", False):
+                    logger.info(f"Edit tracking disabled or config not found for {target_chat_id}, skipping edit")
                     continue
                 
-                # Check if edit tracking is enabled for this channel mapping
-                if not target_config.get("enable_edit_tracking", False):
-                    logger.info(f"Edit tracking disabled for {target_chat_id}, skipping edit")
-                    continue
-                
-                # Get target entity
-                target_entity = self.target_entities.get(target_config["target_channel_id"])
-                if not target_entity:
+                if not (target_entity := self.target_entities.get(target_config["target_channel_id"])):
                     continue
                 
                 try:
-                    # Process the edited text with same transformations as original
                     edited_text = None
                     if message.text:
                         processed_text = self.apply_text_replacements(
@@ -645,25 +329,13 @@ class TelegramForwarder:
                             processed_text = self.convert_timezone(processed_text, src_tz, tgt_tz)
                         edited_text = processed_text
                     
-                    # Edit the forwarded message
-                    if edited_text:
-                        await self.client.edit_message(
-                            target_entity, 
-                            forwarded_msg_id, 
-                            edited_text
-                        )
+                    if edited_text is not None:
+                        await self.client.edit_message(target_entity, forwarded_msg_id, edited_text)
                         successful_edits += 1
                         logger.info(f"Successfully edited message {target_chat_id}:{forwarded_msg_id}")
                     else:
-                        # If no text, try to edit with original content
-                        await self.client.edit_message(
-                            target_entity, 
-                            forwarded_msg_id, 
-                            message.text or ""
-                        )
-                        successful_edits += 1
-                        logger.info(f"Successfully edited message {target_chat_id}:{forwarded_msg_id} (no text processing)")
-                
+                        logger.warning(f"Edited message {source_id}:{message.id} resulted in empty text, not editing.")
+
                 except Exception as e:
                     logger.error(f"Failed to edit message {target_chat_id}:{forwarded_msg_id}: {e}")
             
@@ -675,11 +347,10 @@ class TelegramForwarder:
 
     async def message_mapping_cleanup_scheduler(self):
         """
-        NEW: Clean up old message mappings periodically
+        Cleans up old message mappings periodically.
         """
         while True:
             try:
-                # Clean up mappings older than 7 days every 24 hours
                 await asyncio.sleep(24 * 60 * 60)  # 24 hours
                 self.message_tracker.cleanup_old_mappings(days=7)
                 logger.info("Completed periodic message mapping cleanup")
@@ -702,18 +373,12 @@ async def main():
         
         source_channel_ids = [int(key) for key in forwarder.source_to_configs.keys()]
         
-        # MODIFIED: Add handlers for both new messages and edits
         forwarder.client.add_event_handler(forwarder.forward_messages, events.NewMessage(chats=source_channel_ids))
-        
-        # NEW: Add handler for message edits
         forwarder.client.add_event_handler(forwarder.handle_message_edits, events.MessageEdited(chats=source_channel_ids))
         
-        asyncio.create_task(forwarder.biweekly_report_scheduler())
-        
-        # NEW: Clean up old message mappings weekly
         asyncio.create_task(forwarder.message_mapping_cleanup_scheduler())
         
-        logger.info("Enhanced bot started successfully. Listening for messages and edits...")
+        logger.info("Bot started successfully. Listening for new messages and edits...")
         await forwarder.client.run_until_disconnected()
         
     except Exception as e:
