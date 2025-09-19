@@ -139,7 +139,7 @@ class TelegramForwarder:
             r'https?://\S+', 
             r'@\w+', 
             r'^\s*(\[?#)',
-            r'^\s*👉\s*\[.*@\w+.*\]'
+            r'^\s*👉\s*\[.*@w+.*\]'
         ]
         all_patterns, cleaned_lines = user_patterns + auto_patterns, []
 
@@ -232,56 +232,57 @@ class TelegramForwarder:
             logger.error(f"Error in process_message_for_config: {e}"); traceback.print_exc()
             return None
 
-    async def forward_messages(self, event):
-        message, source_id = event.message, str(event.chat_id)
+    # --- UNIFIED HANDLER TO PREVENT DUPLICATE MESSAGES ---
+    async def unified_handler(self, event):
+        try:
+            message, source_id = event.message, str(event.chat_id)
 
-        # --- FIX: Check if this message has already been forwarded to prevent duplicates on edit ---
-        if self.message_tracker.get_forwarded_messages(source_id, message.id):
-            logger.info(f"Ignoring NewMessage event for already-processed message ID {message.id} from {source_id}. This is likely an edit.")
-            return
-        # --- END OF FIX ---
+            forwarded_messages = self.message_tracker.get_forwarded_messages(source_id, message.id)
+            matching_configs = self.source_to_configs.get(source_id, [])
+            if not matching_configs:
+                return
 
-        if not (matching_configs := self.source_to_configs.get(source_id)): return
-        
-        for config in matching_configs:
-            forwarded_msg_id = await self.process_message_for_config(message, config)
-            if forwarded_msg_id and config.get("enable_edit_tracking", False):
-                self.message_tracker.add_forwarded_message(
-                    source_id, message.id, config["target_channel_id"], forwarded_msg_id
-                )
+            if forwarded_messages:
+                # --- This is an EDIT of a previously forwarded message ---
+                logger.info(f"Processing EDIT for message {source_id}:{message.id}")
+                
+                for fwd_info in forwarded_messages:
+                    target_config = next((c for c in matching_configs if str(c["target_channel_id"]) == fwd_info['target_chat_id']), None)
+                    
+                    if not target_config or not target_config.get("enable_edit_tracking", False):
+                        continue
+                    
+                    target_entity = self.target_entities.get(int(fwd_info['target_chat_id']))
+                    if not target_entity or not message.text:
+                        continue
 
-    async def handle_message_edits(self, event):
-        message, source_id = event.message, str(event.chat_id)
-        forwarded_messages = self.message_tracker.get_forwarded_messages(source_id, message.id)
-        if not forwarded_messages:
-            # This can happen if edit tracking was turned on after the original message was sent.
-            # We can treat it as a new message to be safe.
-            logger.info(f"Edit received for message {source_id}:{message.id}, but no prior forward was tracked. Processing as a new message.")
-            await self.forward_messages(event)
-            return
+                    processed_text = self.remove_promotional_text(message.text, target_config.get("promotional_patterns"))
+                    processed_text = self.apply_text_replacements(processed_text, target_config.get("text_to_replace", {}))
+                    if (src_tz := target_config.get("source_timezone")) and (tgt_tz := target_config.get("target_timezone")):
+                        processed_text = self.convert_timezone(processed_text, src_tz, tgt_tz)
+                    
+                    final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
 
-        matching_configs = self.source_to_configs.get(source_id, [])
-
-        for fwd_info in forwarded_messages:
-            target_config = next((c for c in matching_configs if str(c["target_channel_id"]) == fwd_info['target_chat_id']), None)
-            if not target_config or not target_config.get("enable_edit_tracking", False): continue
-            
-            target_entity = self.target_entities.get(int(fwd_info['target_chat_id']))
-            if not target_entity or not message.text: continue
-
-            processed_text = self.remove_promotional_text(message.text, target_config.get("promotional_patterns"))
-            processed_text = self.apply_text_replacements(processed_text, target_config.get("text_to_replace", {}))
-            if (src_tz := target_config.get("source_timezone")) and (tgt_tz := target_config.get("target_timezone")):
-                processed_text = self.convert_timezone(processed_text, src_tz, tgt_tz)
-            
-            final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
-
-            if final_text:
-                try:
-                    await self.client.edit_message(target_entity, fwd_info['forwarded_msg_id'], final_text)
-                    logger.info(f"Successfully edited message {fwd_info['forwarded_msg_id']}")
-                except Exception as e:
-                    logger.error(f"Failed to edit message {fwd_info['forwarded_msg_id']}: {e}")
+                    if final_text:
+                        try:
+                            await self.client.edit_message(target_entity, fwd_info['forwarded_msg_id'], final_text)
+                            logger.info(f"Successfully edited message {fwd_info['forwarded_msg_id']}")
+                        except Exception as e:
+                            if 'MESSAGE_NOT_MODIFIED' in str(e):
+                                logger.info(f"Message {fwd_info['forwarded_msg_id']} was not modified.")
+                            else:
+                                logger.error(f"Failed to edit message {fwd_info['forwarded_msg_id']}: {e}")
+            else:
+                # --- This is a NEW message ---
+                logger.info(f"Processing NEW message {source_id}:{message.id}")
+                for config in matching_configs:
+                    forwarded_msg_id = await self.process_message_for_config(message, config)
+                    if forwarded_msg_id and config.get("enable_edit_tracking", False):
+                        self.message_tracker.add_forwarded_message(
+                            source_id, message.id, config["target_channel_id"], forwarded_msg_id
+                        )
+        except Exception as e:
+            logger.error(f"Error in unified_handler: {e}"); traceback.print_exc()
 
 async def main():
     if not (pytesseract and Image):
@@ -301,8 +302,16 @@ async def main():
         logger.warning("No target entities cached, bot may not forward messages.")
     
     source_ids = [int(key) for key in forwarder.source_to_configs.keys()]
-    forwarder.client.add_event_handler(forwarder.forward_messages, events.NewMessage(chats=source_ids))
-    forwarder.client.add_event_handler(forwarder.handle_message_edits, events.MessageEdited(chats=source_ids))
+    
+    # --- Registering the single, unified handler ---
+    forwarder.client.add_event_handler(
+        forwarder.unified_handler,
+        events.NewMessage(chats=source_ids)
+    )
+    forwarder.client.add_event_handler(
+        forwarder.unified_handler,
+        events.MessageEdited(chats=source_ids)
+    )
     
     logger.info("Bot started successfully. Listening for new messages and edits...")
     await forwarder.client.run_until_disconnected()
