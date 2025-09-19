@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageMediaWebPage # <-- Import the specific type we need to check
+from telethon.tl.types import MessageMediaWebPage
 import pytz
 
 # --- OCR Imports ---
@@ -136,7 +136,10 @@ class TelegramForwarder:
         if not text: return ""
         user_patterns = patterns or []
         auto_patterns = [
-            r'https?://\S+', r'@\w+', r'^(?:\s*#\w+\s*\|?)+$', r'^\s*👉\s*\[.*@\w+.*\]'
+            r'https?://\S+', 
+            r'@\w+', 
+            r'^\s*(\[?#)',  # --- FIX: This now robustly detects any line starting with '#' or '[#'
+            r'^\s*👉\s*\[.*@\w+.*\]'
         ]
         all_patterns, cleaned_lines = user_patterns + auto_patterns, []
 
@@ -209,9 +212,6 @@ class TelegramForwarder:
             final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
             
             sent_message = None
-            # --- START OF FIX for MessageMediaWebPage error ---
-            
-            # Check if the media is a WebPagePreview, which cannot be sent as a file
             is_web_preview = isinstance(message.media, MessageMediaWebPage)
 
             if final_text or (message.media and config.get("forward_media", True) and not is_web_preview):
@@ -221,15 +221,11 @@ class TelegramForwarder:
                 elif message.photo and not config.get("forward_media", True):
                     if final_text: sent_message = await self.client.send_message(target_entity, final_text)
                 
-                # Forward media only if it's not a web preview
                 elif message.media and config.get("forward_media", True) and not is_web_preview:
                     sent_message = await self.client.send_message(target_entity, final_text or "", file=message.media)
                 
-                # If it was a web preview, or there was no media, just send the final text
                 elif final_text:
                     sent_message = await self.client.send_message(target_entity, final_text)
-            
-            # --- END OF FIX ---
             
             return sent_message.id if sent_message else None
         except Exception as e:
@@ -298,3 +294,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
