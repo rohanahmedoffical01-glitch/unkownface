@@ -230,11 +230,42 @@ class TelegramForwarder:
         try:
             if not (target_entity := self.target_entities.get(config["target_channel_id"])): return None
 
+            # Debug: Log the incoming message text
+            if message.text:
+                logger.info(f"Message received: {repr(message.text[:200])}")
+            
+            # Filter: Only forward Signal Bot, Signal Result, and Currency Statistics messages
+            if message.text:
+                signal_keywords = [
+                    "Signal Bot", "🤖", "💰", "Signal Result", 
+                    "Bot [2 Gales]", "CALL", "PUT", "🟢", "🔴", "🎯",
+                    "💱", "Currency statistics"
+                ]
+                is_signal_message = any(keyword in message.text for keyword in signal_keywords)
+                if not is_signal_message:
+                    logger.info(f"Message filtered out - no signal keywords found")
+                    return None
+                else:
+                    logger.info(f"Signal message detected and will be forwarded")
+
             forward_text = None
             if message.text:
-                processed_text = self.apply_text_replacements(message.text, config.get("text_to_replace", {}))
+                processed_text = message.text
+                
+                # Remove unwanted text first
+                for remove_text in config.get("text_to_remove", []):
+                    processed_text = processed_text.replace(remove_text, "")
+                
+                # Apply text replacements
+                processed_text = self.apply_text_replacements(processed_text, config.get("text_to_replace", {}))
+                
+                # Apply timezone conversion if configured
                 if (src_tz := config.get("source_timezone")) and (tgt_tz := config.get("target_timezone")):
                     processed_text = self.convert_timezone(processed_text, src_tz, tgt_tz)
+                
+                # Clean up extra whitespace and empty lines
+                processed_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
+                
                 forward_text = processed_text
 
             sent_message = None
@@ -242,9 +273,18 @@ class TelegramForwarder:
             if config.get("forward_caption_only") and message.media and forward_text:
                 sent_message = await self.client.send_message(target_entity, forward_text)
             elif message.media and config.get("forward_media", True):
+                # Check if it's a sticker and if stickers are disabled
                 if hasattr(message.media, 'document') and any(hasattr(a, 'stickerset') for a in getattr(message.media.document, 'attributes', [])):
                     if not config.get("forward_stickers", True): return None
-                sent_message = await self.client.send_message(target_entity, forward_text or "", file=message.media)
+                
+                # Handle different media types
+                from telethon.tl.types import MessageMediaWebPage
+                if isinstance(message.media, MessageMediaWebPage):
+                    # Web page previews should be sent as text with the URL
+                    sent_message = await self.client.send_message(target_entity, forward_text or "")
+                else:
+                    # For other media types (photos, documents, etc.)
+                    sent_message = await self.client.send_message(target_entity, forward_text or "", file=message.media)
             elif forward_text:
                 sent_message = await self.client.send_message(target_entity, forward_text)
             
