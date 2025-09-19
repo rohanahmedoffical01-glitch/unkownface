@@ -15,14 +15,31 @@
     }
   },
   {
-    "source_channel_id": -1001755272547,
-    "target_channel_id": -1001565746825,
+    "source_channel_id": -1001565746825,
+    "target_channel_id": -1002924036575,
     "forward_stickers": true,
     "enable_edit_tracking": true,
     "forward_media": true,
     "forward_caption_only": false,
     "block_unapproved_links": false,
-    "text_to_remove": [],
-    "text_to_replace": {}
+    "source_timezone": "Europe/Moscow",
+    "target_timezone": "America/Sao_Paulo",
+    "text_to_remove": [
+      "🔔 Trusted Trading Platforms:",
+      "#Binance | #OKK | #Bybit | #KuCoin | #Kraken",
+      "#IQ_Option | #Expert_Option | #Binomo",
+      "#Quotex | #Pocket_Option | #Binolla",
+      "#Exness | #Exnova | #Robot_AI",
+      "Binance",
+      "Bitcoin Exchange | Cryptocurrency Exchange | Binance",
+      "Binance cryptocurrency exchange - We operate the worlds biggest bitcoin exchange and altcoin crypto exchange in the world by volume",
+      "✨ Ready to maximize your profits with the smartest, high-performing trading bots?",
+      "🚀 Don't miss the chance — discover all the details now and start trading smarter today!",
+      "👉 [ 🇺🇸 @English_Trading_Bot ]",
+      "👉 [ 🇸🇦 @Arabic_Trading_Bot ]"
+    ],
+    "text_to_replace": {
+      "(UTC+3)": "(UTC-3)"
+    }
   }
 ]
