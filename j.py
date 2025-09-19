@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telethon import TelegramClient, events
+from telethon.tl.types import MessageMediaWebPage # <-- Import the specific type we need to check
 import pytz
 
 # --- OCR Imports ---
@@ -32,14 +33,6 @@ api_hash = TELEGRAM_API_HASH
 session_name = 'session'
 config_file = 'config.json'
 message_mapping_file = 'message_mapping.json'
-
-# --- OCR MODIFICATION: Path to Tesseract executable ---
-# If the script can't find Tesseract, uncomment and update the line below.
-# On Windows, it might be: r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-# On Linux, it's usually found automatically, but could be: r'/usr/bin/tesseract'
-# if pytesseract:
-#     pytesseract.pytesseract.tesseract_cmd = r'/path/to/your/tesseract'
-# ----------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,7 +185,6 @@ class TelegramForwarder:
 
             full_text = message.text or ""
 
-            # --- OCR MODIFICATION: Read text from image if enabled ---
             if message.photo and config.get("enable_ocr_on_images") and pytesseract:
                 image_path = None
                 try:
@@ -207,8 +199,7 @@ class TelegramForwarder:
                 finally:
                     if image_path and os.path.exists(image_path):
                         os.remove(image_path)
-            # --- END OCR MODIFICATION ---
-
+            
             processed_text = self.remove_promotional_text(full_text, config.get("promotional_patterns"))
             processed_text = self.apply_text_replacements(processed_text, config.get("text_to_replace", {}))
             
@@ -218,16 +209,27 @@ class TelegramForwarder:
             final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
             
             sent_message = None
-            if final_text or (message.media and config.get("forward_media", True)):
+            # --- START OF FIX for MessageMediaWebPage error ---
+            
+            # Check if the media is a WebPagePreview, which cannot be sent as a file
+            is_web_preview = isinstance(message.media, MessageMediaWebPage)
+
+            if final_text or (message.media and config.get("forward_media", True) and not is_web_preview):
                 if config.get("forward_caption_only") and message.media and final_text:
                     sent_message = await self.client.send_message(target_entity, final_text)
+                
                 elif message.photo and not config.get("forward_media", True):
-                    # If media forwarding is off but we processed an image, send text only
                     if final_text: sent_message = await self.client.send_message(target_entity, final_text)
-                elif message.media and config.get("forward_media", True):
-                    sent_message = await self.client.send_message(target_entity, final_text, file=message.media)
+                
+                # Forward media only if it's not a web preview
+                elif message.media and config.get("forward_media", True) and not is_web_preview:
+                    sent_message = await self.client.send_message(target_entity, final_text or "", file=message.media)
+                
+                # If it was a web preview, or there was no media, just send the final text
                 elif final_text:
                     sent_message = await self.client.send_message(target_entity, final_text)
+            
+            # --- END OF FIX ---
             
             return sent_message.id if sent_message else None
         except Exception as e:
@@ -246,8 +248,6 @@ class TelegramForwarder:
                 )
 
     async def handle_message_edits(self, event):
-        # Note: OCR on edits is not supported as edits don't re-trigger media downloads.
-        # This handler will only re-process the text caption if it is edited.
         message, source_id = event.message, str(event.chat_id)
         forwarded_messages = self.message_tracker.get_forwarded_messages(source_id, message.id)
         matching_configs = self.source_to_configs.get(source_id, [])
