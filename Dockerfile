@@ -14,6 +14,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies from the requirements file
+# A warning about running as root may appear here, which is acceptable during the build stage.
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -23,7 +24,10 @@ COPY . .
 # Create required directories
 RUN mkdir -p images
 
-# Run the telegram bot
-# Assuming your main script is named 'j.py'
+# Create a non-root user, change ownership of the app directory, and switch to the new user
+RUN useradd -ms /bin/bash appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Run the telegram bot as the non-root user
 CMD ["python", "j.py"]
 
