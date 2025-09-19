@@ -212,13 +212,7 @@ class TelegramForwarder:
             final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
             
             sent_message = None
-            
-            # --- START OF FIX for MessageMediaWebPage error ---
-            
-            # Determine if media is present and is NOT a WebPagePreview
             is_web_preview = isinstance(message.media, MessageMediaWebPage)
-            
-            # Determine if we should forward the media file based on config and media type
             should_forward_media = (
                 message.media and
                 config.get("forward_media", True) and
@@ -226,24 +220,12 @@ class TelegramForwarder:
                 not is_web_preview
             )
 
-            # Now, decide what to send
             if should_forward_media:
-                # Case 1: Forward the allowed media with processed text as caption
                 sent_message = await self.client.send_message(
-                    target_entity,
-                    final_text or "",
-                    file=message.media
+                    target_entity, final_text or "", file=message.media
                 )
             elif final_text:
-                # Case 2: Do not forward media, but there is text to send.
-                # This handles text-only messages, disabled media forwarding,
-                # 'forward_caption_only', and filtered link previews.
-                sent_message = await self.client.send_message(
-                    target_entity,
-                    final_text
-                )
-            
-            # --- END OF FIX ---
+                sent_message = await self.client.send_message(target_entity, final_text)
             
             return sent_message.id if sent_message else None
         except Exception as e:
@@ -252,6 +234,13 @@ class TelegramForwarder:
 
     async def forward_messages(self, event):
         message, source_id = event.message, str(event.chat_id)
+
+        # --- FIX: Check if this message has already been forwarded to prevent duplicates on edit ---
+        if self.message_tracker.get_forwarded_messages(source_id, message.id):
+            logger.info(f"Ignoring NewMessage event for already-processed message ID {message.id} from {source_id}. This is likely an edit.")
+            return
+        # --- END OF FIX ---
+
         if not (matching_configs := self.source_to_configs.get(source_id)): return
         
         for config in matching_configs:
@@ -264,6 +253,13 @@ class TelegramForwarder:
     async def handle_message_edits(self, event):
         message, source_id = event.message, str(event.chat_id)
         forwarded_messages = self.message_tracker.get_forwarded_messages(source_id, message.id)
+        if not forwarded_messages:
+            # This can happen if edit tracking was turned on after the original message was sent.
+            # We can treat it as a new message to be safe.
+            logger.info(f"Edit received for message {source_id}:{message.id}, but no prior forward was tracked. Processing as a new message.")
+            await self.forward_messages(event)
+            return
+
         matching_configs = self.source_to_configs.get(source_id, [])
 
         for fwd_info in forwarded_messages:
@@ -283,6 +279,7 @@ class TelegramForwarder:
             if final_text:
                 try:
                     await self.client.edit_message(target_entity, fwd_info['forwarded_msg_id'], final_text)
+                    logger.info(f"Successfully edited message {fwd_info['forwarded_msg_id']}")
                 except Exception as e:
                     logger.error(f"Failed to edit message {fwd_info['forwarded_msg_id']}: {e}")
 
