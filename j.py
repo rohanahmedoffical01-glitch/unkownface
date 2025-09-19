@@ -138,7 +138,7 @@ class TelegramForwarder:
         auto_patterns = [
             r'https?://\S+', 
             r'@\w+', 
-            r'^\s*(\[?#)',  # --- FIX: This now robustly detects any line starting with '#' or '[#'
+            r'^\s*(\[?#)',
             r'^\s*👉\s*\[.*@\w+.*\]'
         ]
         all_patterns, cleaned_lines = user_patterns + auto_patterns, []
@@ -212,20 +212,38 @@ class TelegramForwarder:
             final_text = '\n'.join(line.strip() for line in processed_text.split('\n') if line.strip())
             
             sent_message = None
+            
+            # --- START OF FIX for MessageMediaWebPage error ---
+            
+            # Determine if media is present and is NOT a WebPagePreview
             is_web_preview = isinstance(message.media, MessageMediaWebPage)
+            
+            # Determine if we should forward the media file based on config and media type
+            should_forward_media = (
+                message.media and
+                config.get("forward_media", True) and
+                not config.get("forward_caption_only", False) and
+                not is_web_preview
+            )
 
-            if final_text or (message.media and config.get("forward_media", True) and not is_web_preview):
-                if config.get("forward_caption_only") and message.media and final_text:
-                    sent_message = await self.client.send_message(target_entity, final_text)
-                
-                elif message.photo and not config.get("forward_media", True):
-                    if final_text: sent_message = await self.client.send_message(target_entity, final_text)
-                
-                elif message.media and config.get("forward_media", True) and not is_web_preview:
-                    sent_message = await self.client.send_message(target_entity, final_text or "", file=message.media)
-                
-                elif final_text:
-                    sent_message = await self.client.send_message(target_entity, final_text)
+            # Now, decide what to send
+            if should_forward_media:
+                # Case 1: Forward the allowed media with processed text as caption
+                sent_message = await self.client.send_message(
+                    target_entity,
+                    final_text or "",
+                    file=message.media
+                )
+            elif final_text:
+                # Case 2: Do not forward media, but there is text to send.
+                # This handles text-only messages, disabled media forwarding,
+                # 'forward_caption_only', and filtered link previews.
+                sent_message = await self.client.send_message(
+                    target_entity,
+                    final_text
+                )
+            
+            # --- END OF FIX ---
             
             return sent_message.id if sent_message else None
         except Exception as e:
